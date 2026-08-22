@@ -1,0 +1,38 @@
+# DỮ LIỆU & FILE NÉN (TUYỆT ĐỐI KHÔNG PUSH)
+data/
+*.zip
+*.tar.gz
+*.rar
+*.dcm
+*.png
+*.jpg
+*.jpeg
+
+# TRỌNG SỐ MÔ HÌNH & KẾT QUẢ TRAIN (Nặng)
+*.pth
+*.pt
+*.ckpt
+experiments/
+logs/
+runs/
+
+# MÔI TRƯỜNG PYTHON & CACHE
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+env/
+venv/
+env_xray/
+
+# JUPYTER NOTEBOOK CACHE
+.ipynb_checkpoints/
+
+# CẤU HÌNH IDE & HỆ ĐIỀU HÀNH
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# FILE SIÊU DỮ LIỆU KAGGLE
+dataset-metadata.json

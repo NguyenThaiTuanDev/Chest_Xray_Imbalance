@@ -1,0 +1,11 @@
+pydicom 
+opencv-python 
+pandas 
+numpy 
+matplotlib 
+seaborn 
+tqdm 
+joblib
+albumentations
+scikit-learn
+kaggle
