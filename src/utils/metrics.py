@@ -7,11 +7,21 @@ import warnings
 warnings.filterwarnings('ignore')
 
 def compute_metrics(y_true, y_pred_logits, class_names, threshold=0.5):
-    # Áp dụng hàm Sigmoid để chuyển logits thành xác suất (Probabilities) từ 0 -> 1
+    """
+    Tính toán ROC-AUC và F1-Score cho bài toán Multi-label Classification.
+    
+    Tham số:
+    - y_true: mảng numpy chứa nhãn thực tế (Shape: N x 14)
+    - y_pred_logits: mảng numpy chứa dự đoán của mô hình CHƯA qua sigmoid (Shape: N x 14)
+    - class_names: danh sách tên 14 bệnh
+    - threshold: Ngưỡng quyết định để tính F1 (mặc định 0.5)
+    """
+    
+    # 1. Áp dụng hàm Sigmoid để chuyển logits thành xác suất (Probabilities) từ 0 -> 1
     # Công thức Sigmoid: 1 / (1 + exp(-x))
     y_pred_probs = 1 / (1 + np.exp(-y_pred_logits))
     
-    # Chuyển xác suất thành nhãn nhị phân (0 hoặc 1) dựa vào threshold để tính F1
+    # 2. Chuyển xác suất thành nhãn nhị phân (0 hoặc 1) dựa vào threshold để tính F1
     y_pred_bin = (y_pred_probs >= threshold).astype(float)
     
     num_classes = len(class_names)
@@ -43,7 +53,7 @@ def compute_metrics(y_true, y_pred_logits, class_names, threshold=0.5):
             'F1': f1
         }
         
-    # Tính chỉ số trung bình (Macro Average)
+    # 3. Tính chỉ số trung bình (Macro Average)
     # Bỏ qua các giá trị NaN bằng np.nanmean
     macro_auc = np.nanmean(aucs)
     macro_f1 = np.nanmean(f1s)
@@ -54,3 +64,24 @@ def compute_metrics(y_true, y_pred_logits, class_names, threshold=0.5):
     }
     
     return metrics_dict
+
+
+def print_metrics_to_console(metrics_dict):
+    """
+    Hàm tiện ích để in kết quả ra Terminal dạng bảng cho đẹp.
+    """
+    print("\n" + "="*50)
+    print(f"{'BỆNH LÝ':<25} | {'ROC-AUC':<10} | {'F1-SCORE':<10}")
+    print("-" * 50)
+    
+    for class_name, metrics in metrics_dict.items():
+        if class_name == 'Macro_Average':
+            continue
+            
+        auc_str = f"{metrics['AUC']:.4f}" if not np.isnan(metrics['AUC']) else "N/A"
+        f1_str = f"{metrics['F1']:.4f}"
+        print(f"{class_name:<25} | {auc_str:<10} | {f1_str:<10}")
+        
+    print("-" * 50)
+    print(f"{'MACRO AVERAGE (TRUNG BÌNH)':<25} | {metrics_dict['Macro_Average']['AUC']:.4f:<10} | {metrics_dict['Macro_Average']['F1']:.4f:<10}")
+    print("="*50 + "\n")

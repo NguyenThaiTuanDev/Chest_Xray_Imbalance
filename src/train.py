@@ -1,78 +1,115 @@
+import os
+import argparse
+import numpy as np
+import pandas as pd
 import torch
 import torch.optim as optim
 from tqdm import tqdm
-import os
+from sklearn.model_selection import train_test_split
 
 from datasets.dataset import get_dataloaders
 from models.classifier import build_model
 from losses.standard_bce import StandardBCE
+from utils.metrics import compute_metrics, print_metrics_to_console
 
-def train_one_epoch(model, dataloader, criterion, optimizer, device, is_test_run=False):
-    model.train() # Chuyển mô hình sang chế độ huấn luyện
+def train_one_epoch(model, dataloader, criterion, optimizer, device):
+    model.train()
     running_loss = 0.0
-    
-    prog_bar = tqdm(enumerate(dataloader), total=len(dataloader), desc="Training")
+    prog_bar = tqdm(enumerate(dataloader), total=len(dataloader), desc="🚀 Training")
     
     for batch_idx, (images, labels) in prog_bar:
-        images = images.to(device)
-        labels = labels.to(device)
+        images, labels = images.to(device), labels.to(device)
         
-        optimizer.zero_grad()            # Xóa gradient cũ
-        outputs = model(images)          # Dự đoán
-        loss = criterion(outputs, labels)# Tính sai số
-        loss.backward()                  # Lan truyền ngược
-        optimizer.step()                 # Cập nhật trọng số
+        optimizer.zero_grad()
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
         
         running_loss += loss.item()
         prog_bar.set_postfix({'loss': f"{running_loss / (batch_idx + 1):.4f}"})
         
-        # ⚠️ CHẾ ĐỘ TEST PC: Chỉ chạy 2 batch rồi ngắt để không đơ CPU
-        if is_test_run and batch_idx == 1:
-            print("\n[Sanity Check] Đã chạy xong 2 batch đầu tiên. Luồng dữ liệu hoàn hảo!")
-            break
+    return running_loss / len(dataloader)
 
-def main():
-    # 1. Tự động nhận diện thiết bị
+@torch.no_grad() # Tắt tính toán đạo hàm để tiết kiệm VRAM khi Test
+def evaluate(model, dataloader, criterion, device, class_names):
+    model.eval()
+    running_loss = 0.0
+    all_targets = []
+    all_outputs = []
+    
+    prog_bar = tqdm(enumerate(dataloader), total=len(dataloader), desc="🔎 Validating")
+    
+    for batch_idx, (images, labels) in prog_bar:
+        images, labels = images.to(device), labels.to(device)
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        running_loss += loss.item()
+        
+        # Gom kết quả lại để tính AUC
+        all_targets.append(labels.cpu().numpy())
+        all_outputs.append(outputs.cpu().numpy())
+        
+    all_targets = np.vstack(all_targets)
+    all_outputs = np.vstack(all_outputs)
+    
+    val_loss = running_loss / len(dataloader)
+    metrics_dict = compute_metrics(all_targets, all_outputs, class_names)
+    
+    return val_loss, metrics_dict
+
+def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"🚀 Đang chạy thử nghiệm trên: {device.type.upper()}")
+    print(f"🔥 BẮT ĐẦU HUẤN LUYỆN TRÊN THIẾT BỊ: {device.type.upper()}")
     
-    # 2. Cấu hình đường dẫn dữ liệu NIH
-    CSV_FILE = 'data/processed/nih_labels.csv' 
-    IMAGE_DIR = 'data/processed/nih_512x512/images'
+    # 1. Tách tập Train/Val tự động (Tỉ lệ 80/20)
+    df_full = pd.read_csv(args.csv_file)
+    train_df, val_df = train_test_split(df_full, test_size=0.2, random_state=42)
     
-    if not os.path.exists(CSV_FILE):
-        print(f"Lỗi: Không tìm thấy file {CSV_FILE}.")
-        return
-
-    # 3. Nạp dữ liệu
-    print("⏳ Đang nạp DataLoader...")
-    train_loader, label_cols = get_dataloaders(
-        csv_file=CSV_FILE, 
-        image_dir=IMAGE_DIR, 
-        batch_size=32, 
-        is_train=True,
-        num_workers=0 # Giữ 0 trên PC Windows
-    )
+    # Lưu tạm ra file CSV để Dataloader đọc
+    train_csv = 'temp_train.csv'
+    val_csv = 'temp_val.csv'
+    train_df.to_csv(train_csv, index=False)
+    val_df.to_csv(val_csv, index=False)
     
-    # 4. Tải Model & Cấu hình AI
-    print("⏳ Đang khởi tạo DenseNet121...")
-    model = build_model(num_classes=14, pretrained=True)
-    model = model.to(device)
+    # 2. Khởi tạo Dataloaders
+    print("⏳ Nạp DataLoader...")
+    train_loader, class_names = get_dataloaders(train_csv, args.img_dir, args.batch_size, is_train=True, num_workers=args.num_workers)
+    val_loader, _ = get_dataloaders(val_csv, args.img_dir, args.batch_size, is_train=False, num_workers=args.num_workers)
     
+    # 3. Khởi tạo Mô hình & Loss
+    model = build_model(num_classes=14, pretrained=True).to(device)
     criterion = StandardBCE()
-    optimizer = optim.AdamW(model.parameters(), lr=1e-4) # AdamW tốt hơn Adam thường
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr)
     
-    # 5. Chạy thử nghiệm
-    print("🔥 Bắt đầu Dry Run...")
-    train_one_epoch(
-        model=model, 
-        dataloader=train_loader, 
-        criterion=criterion, 
-        optimizer=optimizer, 
-        device=device,
-        is_test_run=True # Quan trọng
-    )
-    print("✅ XUẤT SẮC! Toàn bộ hệ thống đã thông suốt!")
+    best_macro_auc = 0.0
+    
+    # 4. Vòng lặp Huấn luyện (Epochs)
+    for epoch in range(1, args.epochs + 1):
+        print(f"\n{'='*20} EPOCH {epoch}/{args.epochs} {'='*20}")
+        
+        train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
+        val_loss, metrics = evaluate(model, val_loader, criterion, device, class_names)
+        
+        print(f"\n[Epoch {epoch}] Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
+        print_metrics_to_console(metrics)
+        
+        macro_auc = metrics['Macro_Average']['AUC']
+        
+        # 5. Lưu mô hình tốt nhất dựa vào Macro-AUC
+        if macro_auc > best_macro_auc:
+            best_macro_auc = macro_auc
+            save_path = f"best_baseline_bce.pth"
+            torch.save(model.state_dict(), save_path)
+            print(f"⭐ Đã lưu mô hình tốt nhất tại Epoch {epoch} với Macro-AUC: {best_macro_auc:.4f}")
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--csv_file', type=str, required=True, help="Đường dẫn file CSV nhãn gốc")
+    parser.add_argument('--img_dir', type=str, required=True, help="Đường dẫn thư mục chứa ảnh")
+    parser.add_argument('--epochs', type=int, default=10, help="Số epoch huấn luyện")
+    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--num_workers', type=int, default=2)
+    args = parser.parse_args()
+    main(args)
